@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Formation {
+  id          String   @id @default(uuid())
+  titre       String
+  description String
+  niveau      String   
+  duree       String   
+  gratuit     Boolean  @default(false)
+  publie      Boolean  @default(false)
+  modules      Module[]
+  inscriptions InscriptionFormation[]
+  attestations Attestation[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Module {
+  id          String    @id @default(uuid())
+  titre       String
+  description String?
+  typeContenu String    @default("VIDEO") // VIDEO, LECTURE, QUIZ
+  contenu     String?   
+  contenuUrl  String?
+  duree       Int?      // Duration in minutes
+  formationId String
+  formation   Formation @relation(fields: [formationId], references: [id], onDelete: Cascade)
+  progressions ProgressionModule[]
+  quiz         Quiz?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Quiz {
+  id          String     @id @default(uuid())
+  moduleId    String     @unique
+  module      Module     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  questions   Question[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Question {
+  id          String          @id @default(uuid())
+  texte       String
+  quizId      String
+  quiz        Quiz            @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options     ReponseOption[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model ReponseOption {
+  id          String   @id @default(uuid())
+  texte       String
+  estCorrecte Boolean  @default(false)
+  questionId  String
+  question    Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+}
+
+enum ProfilType {
+  PARTICULIER
+  ENTREPRISE
+}
+
+enum AccesStatus {
+  GRATUIT
+  PAYANT
+}
+
+enum Role {
+  ADMIN
+  ELEVE
+}
+
+model Utilisateur {
+  id          String      @id @default(uuid())
+  email       String      @unique
+  motDePasse  String
+  nom         String
+  profil      ProfilType  @default(PARTICULIER)
+  statutAcces AccesStatus @default(GRATUIT)
+  photo       String?
+  telephone   String?
+  poste       String?
+  role        Role        @default(ELEVE)
+  actif       Boolean     @default(true)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  inscriptions         InscriptionFormation[]
+  progressions         ProgressionModule[]
+  attestations         Attestation[]
+  notifications        Notification[]
+}
+
+model InscriptionFormation {
+  id          String      @id @default(uuid())
+  utilisateurId String
+  formationId String
+  progression Float       @default(0.0) // 0 to 100
+  statut      String      @default("EN_COURS") // EN_COURS, TERMINE
+  utilisateur Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  formation   Formation   @relation(fields: [formationId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([utilisateurId, formationId])
+}
+
+model ProgressionModule {
+  id          String      @id @default(uuid())
+  utilisateurId String
+  moduleId    String
+  termine     Boolean     @default(false)
+  score       Int?        // score if there's a quiz
+  utilisateur Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  module      Module      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([utilisateurId, moduleId])
+}
+
+model Attestation {
+  id          String      @id @default(uuid())
+  utilisateurId String
+  formationId String
+  urlReference String?
+  utilisateur Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  formation   Formation   @relation(fields: [formationId], references: [id], onDelete: Cascade)
+  dateObtention DateTime  @default(now())
+
+  @@unique([utilisateurId, formationId])
+}
+
+model Notification {
+  id            String      @id @default(uuid())
+  titre         String
+  message       String
+  lu            Boolean     @default(false)
+  lien          String?
+  utilisateurId String
+  utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
