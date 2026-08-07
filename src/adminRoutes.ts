@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from './index';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 const router = Router();
 
@@ -17,6 +20,39 @@ const verifyAdmin = async (req: any, res: any, next: any) => {
 };
 
 router.use(verifyAdmin);
+
+// ==========================================
+// FILE UPLOAD (ADMIN)
+// ==========================================
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadPath = path.join(process.cwd(), 'uploads');
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    cb(null, uploadPath);
+  },
+  filename: function (req, file, cb) {
+    // Generate unique name: timestamp + original extension
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage: storage });
+
+router.post('/upload', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    // Return the URL that can be used to access the file
+    const fileUrl = `http://localhost:5000/uploads/${req.file.filename}`;
+    res.json({ url: fileUrl });
+  } catch (error) {
+    console.error('Error during upload:', error);
+    res.status(500).json({ error: 'Failed to upload file' });
+  }
+});
 
 // ==========================================
 // DASHBOARD STATS
@@ -230,6 +266,131 @@ router.delete('/modules/:moduleId', async (req, res) => {
     await prisma.module.delete({ where: { id: moduleId } });
     res.json({ success: true });
   } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==========================================
+// QUIZ MANAGEMENT (ADMIN)
+// ==========================================
+router.get('/modules/:moduleId/quiz', async (req, res) => {
+  try {
+    const { moduleId } = req.params;
+    const quiz = await prisma.quiz.findUnique({
+      where: { moduleId },
+      include: {
+        questions: {
+          include: {
+            options: true
+          }
+        }
+      }
+    });
+    res.json(quiz || null);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/modules/:moduleId/quiz', async (req, res) => {
+  try {
+    const { moduleId } = req.params;
+    const { questions } = req.body;
+
+    // First, check if quiz exists. If so, delete it to recreate (simple approach for MVP)
+    const existingQuiz = await prisma.quiz.findUnique({ where: { moduleId } });
+    if (existingQuiz) {
+      await prisma.quiz.delete({ where: { id: existingQuiz.id } });
+    }
+
+    const newQuiz = await prisma.quiz.create({
+      data: {
+        moduleId,
+        questions: {
+          create: questions.map((q: any) => ({
+            texte: q.texte,
+            options: {
+              create: q.options.map((o: any) => ({
+                texte: o.texte,
+                estCorrecte: o.estCorrecte
+              }))
+            }
+          }))
+        }
+      },
+      include: {
+        questions: {
+          include: {
+            options: true
+          }
+        }
+      }
+    });
+    res.status(201).json(newQuiz);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ==========================================
+// USER PROGRESS (ADMIN)
+// ==========================================
+router.get('/users/:userId/progress', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const inscriptions = await prisma.inscriptionFormation.findMany({
+      where: { utilisateurId: userId },
+      include: {
+        formation: {
+          include: {
+            modules: {
+              include: {
+                quiz: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const completedModules = await prisma.progressionModule.findMany({
+      where: { utilisateurId: userId },
+      include: {
+        module: true
+      }
+    });
+
+    // Format the progress data
+    const progressData = inscriptions.map(ins => {
+      const courseModules = ins.formation.modules;
+      const totalModules = courseModules.length;
+      
+      const completedForThisCourse = completedModules.filter(cm => 
+        courseModules.some(m => m.id === cm.moduleId)
+      );
+
+      const completedCount = completedForThisCourse.filter(cm => cm.termine).length;
+      const percentage = totalModules > 0 ? Math.round((completedCount / totalModules) * 100) : 0;
+
+      const quizScores = completedForThisCourse
+        .filter(cm => cm.module.typeContenu === 'QUIZ' && cm.score !== null)
+        .map(cm => ({
+          moduleTitle: cm.module.titre,
+          score: cm.score
+        }));
+
+      return {
+        formationId: ins.formation.id,
+        titre: ins.formation.titre,
+        progression: percentage,
+        quizScores
+      };
+    });
+
+    res.json(progressData);
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Server error' });
   }
 });

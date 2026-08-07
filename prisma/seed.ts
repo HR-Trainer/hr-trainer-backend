@@ -1,6 +1,9 @@
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const connectionString = process.env.DATABASE_URL!;
 const pool = new Pool({ connectionString });
@@ -11,6 +14,24 @@ async function main() {
   console.log('Clearing database...');
   await prisma.module.deleteMany();
   await prisma.formation.deleteMany();
+
+  console.log('Seeding default Admin account...');
+  const adminEmail = process.env.ADMIN_EMAIL || 'admin@hr-trainer.com';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'admin123.';
+  const hashedPassword = await bcrypt.hash(adminPassword, 10);
+
+  await prisma.utilisateur.upsert({
+    where: { email: adminEmail },
+    update: { motDePasse: hashedPassword, role: 'ADMIN', nom: 'Admin' },
+    create: { 
+      email: adminEmail, 
+      motDePasse: hashedPassword, 
+      role: 'ADMIN', 
+      nom: 'Admin', 
+      profil: 'PARTICULIER', 
+      statutAcces: 'GRATUIT' 
+    }
+  });
 
   console.log('Seeding database with English data...');
 
