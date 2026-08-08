@@ -14,6 +14,7 @@ model Formation {
   duree       String   
   gratuit     Boolean  @default(false)
   publie      Boolean  @default(false)
+  imageUrl    String?
   modules      Module[]
   inscriptions InscriptionFormation[]
   attestations Attestation[]
