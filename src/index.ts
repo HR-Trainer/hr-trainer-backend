@@ -7,6 +7,7 @@ import { PrismaClient } from '@prisma/client';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
 import adminRoutes from './adminRoutes';
+import agentRoutes from './agentRoutes';
 import path from 'path';
 
 const connectionString = process.env.DATABASE_URL!;
@@ -34,6 +35,9 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
 // Register admin routes
 app.use('/api/admin', adminRoutes);
+
+// Register agent routes
+app.use('/api/eleve/modules/:moduleId/agent', agentRoutes);
 
 //Récupérer toutes les formations 
 app.get('/api/formations', async (req, res) => {
@@ -151,6 +155,23 @@ app.post('/api/contact', async (req, res) => {
     });
 
     res.status(200).json({ success: true, messageId: info.messageId });
+    
+    // Create in-app notification for all admins
+    try {
+      const admins = await prisma.utilisateur.findMany({ where: { role: 'ADMIN', actif: true } });
+      const notifs = admins.map(admin => ({
+        utilisateurId: admin.id,
+        titre: `Nouveau message: ${type}`,
+        message: `De ${nom} (${email})`,
+        lien: '/admin/dashboard'
+      }));
+      if (notifs.length > 0) {
+        await prisma.notification.createMany({ data: notifs });
+      }
+    } catch (notifErr) {
+      console.error('Erreur creation notif contact:', notifErr);
+    }
+
   } catch (error) {
     console.error('Erreur email:', error);
     res.status(500).json({ error: 'Erreur lors de l\'envoi' });
@@ -187,6 +208,23 @@ app.post('/api/inscription', async (req, res) => {
     });
 
     res.status(201).json({ success: true, user: { id: newUser.id, email: newUser.email, nom: newUser.nom, profil: newUser.profil } });
+
+    // Create in-app notification for admins
+    try {
+      const admins = await prisma.utilisateur.findMany({ where: { role: 'ADMIN', actif: true } });
+      const notifs = admins.map(admin => ({
+        utilisateurId: admin.id,
+        titre: 'Nouvel utilisateur',
+        message: `${newUser.nom} vient de créer un compte (${newUser.profil}).`,
+        lien: '/admin/users'
+      }));
+      if (notifs.length > 0) {
+        await prisma.notification.createMany({ data: notifs });
+      }
+    } catch (notifErr) {
+      console.error('Erreur creation notif inscription:', notifErr);
+    }
+
   } catch (error) {
     console.error('Erreur inscription:', error);
     res.status(500).json({ error: 'Erreur lors de la création du compte' });
@@ -203,6 +241,11 @@ app.post('/api/connexion', async (req, res) => {
     const user = await prisma.utilisateur.findUnique({ where: { email } });
     if (!user) {
       res.status(401).json({ error: 'Identifiants incorrects' });
+      return;
+    }
+
+    if (!user.actif) {
+      res.status(403).json({ error: 'Votre compte a été désactivé par un administrateur.' });
       return;
     }
 
@@ -241,6 +284,21 @@ app.put('/api/profil', async (req, res) => {
   }
 });
 
+app.delete('/api/eleve/account', async (req, res) => {
+  try {
+    const { id } = req.body;
+    if (!id) {
+      res.status(400).json({ error: 'ID manquant' });
+      return;
+    }
+    await prisma.utilisateur.delete({ where: { id } });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erreur suppression compte:', error);
+    res.status(500).json({ error: 'Erreur lors de la suppression du compte' });
+  }
+});
+
 // Authentification Google 
 app.post('/api/auth/google', async (req, res) => {
   try {
@@ -253,6 +311,11 @@ app.post('/api/auth/google', async (req, res) => {
 
     let user = await prisma.utilisateur.findUnique({ where: { email } });
     
+    if (user && !user.actif) {
+      res.status(403).json({ error: 'Votre compte a été désactivé par un administrateur.' });
+      return;
+    }
+
     // Si l'utilisateur n'existe pas
     if (!user) {
       const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
@@ -400,7 +463,8 @@ app.get('/api/eleve/dashboard', async (req, res) => {
       stats: {
         modulesTermines,
         attestations
-      }
+      },
+      createdAt: user.createdAt
     });
   } catch (error) {
     console.error('Erreur dashboard eleve:', error);
