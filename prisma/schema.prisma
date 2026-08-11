@@ -26,10 +26,10 @@ model Module {
   id          String    @id @default(uuid())
   titre       String
   description String?
-  typeContenu String    @default("VIDEO") // VIDEO, LECTURE, QUIZ
+  typeContenu String    @default("VIDEO") 
   contenu     String?   
   contenuUrl  String?
-  duree       Int?      // Duration in minutes
+  duree       Int?     
   formationId String
   formation   Formation @relation(fields: [formationId], references: [id], onDelete: Cascade)
   progressions ProgressionModule[]
@@ -106,8 +106,8 @@ model InscriptionFormation {
   id          String      @id @default(uuid())
   utilisateurId String
   formationId String
-  progression Float       @default(0.0) // 0 to 100
-  statut      String      @default("EN_COURS") // EN_COURS, TERMINE
+  progression Float       @default(0.0) 
+  statut      String      @default("EN_COURS") 
   utilisateur Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
   formation   Formation   @relation(fields: [formationId], references: [id], onDelete: Cascade)
   createdAt   DateTime    @default(now())
@@ -121,7 +121,7 @@ model ProgressionModule {
   utilisateurId String
   moduleId    String
   termine     Boolean     @default(false)
-  score       Int?        // score if there's a quiz
+  score       Int?        
   utilisateur Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
   module      Module      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
   createdAt   DateTime    @default(now())
@@ -158,7 +158,7 @@ model MessageAgent {
   id            String      @id @default(uuid())
   utilisateurId String
   moduleId      String
-  role          String      // "USER" ou "AI"
+  role          String      
   contenu       String
   createdAt     DateTime    @default(now())
   

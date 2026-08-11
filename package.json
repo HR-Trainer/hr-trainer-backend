@@ -23,7 +23,6 @@
   },
   "homepage": "https://github.com/HR-Trainer/hr-trainer-backend#readme",
   "dependencies": {
-    "@google/genai": "^2.16.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "@types/nodemailer": "^8.0.1",
@@ -33,6 +32,7 @@
     "express": "^5.2.1",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.3",
+    "openai": "^7.4.0",
     "pg": "^8.22.0",
     "resend": "^6.17.2"
   },

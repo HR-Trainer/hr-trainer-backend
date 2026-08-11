@@ -7,7 +7,7 @@ import fs from 'fs';
 
 const router = Router();
 
-// Middleware to verify admin (Basic implementation, assuming email is passed in query or body for simplicity in this MVP. In production, use JWT or proper session verification)
+// Middleware to verify admin 
 const verifyAdmin = async (req: any, res: any, next: any) => {
   const email = req.query.adminEmail || req.body.adminEmail;
   if (!email) return res.status(401).json({ error: 'Unauthorized' });
@@ -21,9 +21,7 @@ const verifyAdmin = async (req: any, res: any, next: any) => {
 
 router.use(verifyAdmin);
 
-// ==========================================
-// FILE UPLOAD (ADMIN)
-// ==========================================
+// upload file
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const uploadPath = path.join(process.cwd(), 'uploads');
@@ -33,7 +31,7 @@ const storage = multer.diskStorage({
     cb(null, uploadPath);
   },
   filename: function (req, file, cb) {
-    // Generate unique name: timestamp + original extension
+    // generate unique name
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
   }
@@ -45,7 +43,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    // Return the URL that can be used to access the file
+    // url that to access file
     const fileUrl = `http://localhost:5000/uploads/${req.file.filename}`;
     res.json({ url: fileUrl });
   } catch (error) {
@@ -54,9 +52,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
   }
 });
 
-// ==========================================
-// DASHBOARD STATS
-// ==========================================
+// dashboard stats
 router.get('/dashboard', async (req, res) => {
   try {
     const totalUsers = await prisma.utilisateur.count({ where: { role: 'ELEVE' } });
@@ -64,7 +60,7 @@ router.get('/dashboard', async (req, res) => {
     const totalFormations = await prisma.formation.count();
     const premiumUsers = await prisma.utilisateur.count({ where: { role: 'ELEVE', statutAcces: 'PAYANT' } });
 
-    // Fetch recent activity (latest 5 users)
+    // fetch recent activity
     const recentUsers = await prisma.utilisateur.findMany({
       where: { role: 'ELEVE' },
       orderBy: { createdAt: 'desc' },
@@ -84,9 +80,7 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// ==========================================
-// USERS MANAGEMENT
-// ==========================================
+// users management
 router.get('/users', async (req, res) => {
   try {
     const users = await prisma.utilisateur.findMany({
@@ -149,9 +143,7 @@ router.delete('/users/:id', async (req, res) => {
   }
 });
 
-// ==========================================
-// FORMATIONS MANAGEMENT
-// ==========================================
+// formations management
 router.get('/formations', async (req, res) => {
   try {
     const formations = await prisma.formation.findMany({
@@ -202,9 +194,7 @@ router.delete('/formations/:id', async (req, res) => {
   }
 });
 
-// ==========================================
-// MODULES MANAGEMENT (ADMIN)
-// ==========================================
+// modules management
 router.get('/formations/:id/modules', async (req, res) => {
   try {
     const { id } = req.params;
@@ -270,9 +260,7 @@ router.delete('/modules/:moduleId', async (req, res) => {
   }
 });
 
-// ==========================================
-// QUIZ MANAGEMENT (ADMIN)
-// ==========================================
+// quiz management
 router.get('/modules/:moduleId/quiz', async (req, res) => {
   try {
     const { moduleId } = req.params;
@@ -333,9 +321,7 @@ router.post('/modules/:moduleId/quiz', async (req, res) => {
   }
 });
 
-// ==========================================
-// USER PROGRESS (ADMIN)
-// ==========================================
+// user progress management
 router.get('/users/:userId/progress', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -361,7 +347,7 @@ router.get('/users/:userId/progress', async (req, res) => {
       }
     });
 
-    // Format the progress data
+    // format the progress data
     const progressData = inscriptions.map(ins => {
       const courseModules = ins.formation.modules;
       const totalModules = courseModules.length;

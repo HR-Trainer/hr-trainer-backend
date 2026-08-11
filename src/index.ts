@@ -17,7 +17,7 @@ export const prisma = new PrismaClient({ adapter });
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Configuration de Nodemailer
+// configuration de Nodemailer
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -30,16 +30,14 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Serve uploaded files statically
+// serve uploaded files 
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
-// Register admin routes
 app.use('/api/admin', adminRoutes);
 
-// Register agent routes
 app.use('/api/eleve/modules/:moduleId/agent', agentRoutes);
 
-//Récupérer toutes les formations 
+//récupérer toutes les formations 
 app.get('/api/formations', async (req, res) => {
   try {
     const formations = await prisma.formation.findMany({
@@ -51,7 +49,7 @@ app.get('/api/formations', async (req, res) => {
   }
 });
 
-//Récupérer une formation spécifique par ID
+//récupérer une formation par ID
 app.get('/api/formations/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -75,12 +73,11 @@ app.get('/api/formations/:id', async (req, res) => {
   }
 });
 
-//Envoyer un email via Nodemailer
+//envoyer un email 
 app.post('/api/contact', async (req, res) => {
   try {
     const { nom, email, message, type } = req.body;
-    
-    // On envoie l'email à soi-même 
+     
     const info = await transporter.sendMail({
       from: `"Formateur RH" <${process.env.EMAIL_USER}>`,
       to: process.env.EMAIL_USER,
@@ -156,7 +153,7 @@ app.post('/api/contact', async (req, res) => {
 
     res.status(200).json({ success: true, messageId: info.messageId });
     
-    // Create in-app notification for all admins
+    // create notification 
     try {
       const admins = await prisma.utilisateur.findMany({ where: { role: 'ADMIN', actif: true } });
       const notifs = admins.map(admin => ({
@@ -185,16 +182,14 @@ app.post('/api/inscription', async (req, res) => {
   try {
     const { email, password, nom, profil } = req.body;
     
-    // Domain restriction removed for testing purposes
-
-    // Vérifier si l'utilisateur existe 
+    //si l'utilisateur existe 
     const existingUser = await prisma.utilisateur.findUnique({ where: { email } });
     if (existingUser) {
       res.status(400).json({ error: 'Cet email est déjà utilisé' });
       return;
     }
 
-    // Hacher le mot de passe
+    // hacher le password
     const hashedPassword = await bcrypt.hash(password, 10);
     
     const newUser = await prisma.utilisateur.create({
@@ -209,7 +204,7 @@ app.post('/api/inscription', async (req, res) => {
 
     res.status(201).json({ success: true, user: { id: newUser.id, email: newUser.email, nom: newUser.nom, profil: newUser.profil } });
 
-    // Create in-app notification for admins
+    // create  notification 
     try {
       const admins = await prisma.utilisateur.findMany({ where: { role: 'ADMIN', actif: true } });
       const notifs = admins.map(admin => ({
@@ -235,8 +230,6 @@ app.post('/api/inscription', async (req, res) => {
 app.post('/api/connexion', async (req, res) => {
   try {
     const { email, password } = req.body;
-    
-    // Domain restriction removed for login to allow admin and legacy accounts
 
     const user = await prisma.utilisateur.findUnique({ where: { email } });
     if (!user) {
@@ -262,7 +255,7 @@ app.post('/api/connexion', async (req, res) => {
   }
 });
 
-//  Mettre à jour le profil
+//  update profile
 app.put('/api/profil', async (req, res) => {
   try {
     const { id, nom, telephone, poste, photo } = req.body;
@@ -316,7 +309,6 @@ app.post('/api/auth/google', async (req, res) => {
       return;
     }
 
-    // Si l'utilisateur n'existe pas
     if (!user) {
       const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
       user = await prisma.utilisateur.create({
@@ -330,7 +322,7 @@ app.post('/api/auth/google', async (req, res) => {
         }
       });
     } else {
-      // Mettre à jour la photo 
+      // update photo 
       if (image && !user.photo) {
         user = await prisma.utilisateur.update({
           where: { email },
@@ -355,12 +347,12 @@ app.post('/api/mot-de-passe-oublie', async (req, res) => {
       return;
     }
 
-    // in MVP  check if user exists.
+    // check if user exists
     const resetLink = `http://localhost:3000/reinitialiser-mot-de-passe?email=${encodeURIComponent(email)}`;
 
     const info = await transporter.sendMail({
       from: `"HR-Trainer" <${process.env.EMAIL_USER}>`,
-      to: email, // Send to the user's email
+      to: email, 
       subject: `Password Reset - HR-Trainer`,
       html: `
         <div style="background-color: #f4f4f5; padding: 40px 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #18181b;">
@@ -434,7 +426,7 @@ app.get('/api/eleve/dashboard', async (req, res) => {
       include: { formation: { include: { modules: { take: 1, orderBy: { createdAt: 'asc' } } } } }
     });
 
-    // All Published Formations
+    // Published Formations
     const availableCourses = await prisma.formation.findMany({
       where: { publie: true },
       include: { modules: { take: 1, orderBy: { createdAt: 'asc' } } }
@@ -542,7 +534,7 @@ app.post('/api/eleve/modules/:moduleId/complete', async (req, res) => {
 
     let finalScore = score ?? null;
 
-    // Securely compute score if answers are provided
+    // compute score if answers are provided
     if (answers && Object.keys(answers).length > 0) {
       const quiz = await prisma.quiz.findUnique({
         where: { moduleId },
@@ -561,14 +553,14 @@ app.post('/api/eleve/modules/:moduleId/complete', async (req, res) => {
       }
     }
 
-    // Update or create progression
+    // update or create progression
     const progression = await prisma.progressionModule.upsert({
       where: { utilisateurId_moduleId: { utilisateurId: user.id, moduleId } },
       update: { termine: true, score: finalScore },
       create: { utilisateurId: user.id, moduleId, termine: true, score: finalScore }
     });
 
-    // Update global formation progression
+    // update global formation progression
     const totalModules = module.formation.modules.length;
     const termines = await prisma.progressionModule.count({
       where: {
@@ -586,7 +578,7 @@ app.post('/api/eleve/modules/:moduleId/complete', async (req, res) => {
       create: { utilisateurId: user.id, formationId: module.formationId, progression: percent, statut: percent === 100 ? "TERMINE" : "EN_COURS" }
     });
 
-    // If 100%, generate Attestation
+    //generate Attestation
     if (percent === 100) {
       const existing = await prisma.attestation.findUnique({
         where: { utilisateurId_formationId: { utilisateurId: user.id, formationId: module.formationId } }
@@ -631,7 +623,7 @@ app.get('/api/eleve/attestations', async (req, res) => {
   }
 });
 
-// Notifications API
+// Notifications 
 app.get('/api/notifications', async (req, res) => {
   try {
     const { email } = req.query;

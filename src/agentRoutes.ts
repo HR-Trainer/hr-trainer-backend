@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import { prisma } from './index';
 import nodemailer from 'nodemailer';
-import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 
 const router = Router({ mergeParams: true });
 
-// Nodemailer config for reporting
+// nodemailer config 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -16,10 +16,12 @@ const transporter = nodemailer.createTransport({
 
 const MAX_DAILY_MESSAGES = 10;
 
-// Initialize Gemini SDK
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || 'dummy_key' });
+const groq = new OpenAI({ 
+  apiKey: process.env.GROQ_API_KEY || 'dummy_key',
+  baseURL: 'https://api.groq.com/openai/v1'
+});
 
-// Get chat history
+// get chat history
 router.get('/', async (req, res) => {
   try {
     const { moduleId } = req.params;
@@ -45,7 +47,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Post a new message to the agent
+// post a new message to the agent
 router.post('/', async (req, res) => {
   try {
     const { moduleId } = req.params;
@@ -56,7 +58,7 @@ router.post('/', async (req, res) => {
     const user = await prisma.utilisateur.findUnique({ where: { email } });
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Check daily limit
+    // check daily limit
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const messageCount = await prisma.messageAgent.count({
@@ -71,16 +73,16 @@ router.post('/', async (req, res) => {
       return res.status(429).json({ error: 'Plafond quotidien de messages atteint. Revenez demain !' });
     }
 
-    // Fetch module content
+    // fetch module content
     const moduleInfo = await prisma.module.findUnique({ where: { id: moduleId } });
     if (!moduleInfo) return res.status(404).json({ error: 'Module not found' });
 
-    // Check for HR / Labour law keywords
+    // check for HR / Labour law keywords
     const lowerMessage = message.toLowerCase();
     const hrKeywords = ['droit du travail', 'loi', 'licenciement', 'contrat', 'prud\'hommes', 'convention collective', 'légal', 'juridique'];
     const isHrQuestion = hrKeywords.some(keyword => lowerMessage.includes(keyword));
 
-    // Save user message
+    // save user message
     await prisma.messageAgent.create({
       data: {
         utilisateurId: user.id,
@@ -90,53 +92,58 @@ router.post('/', async (req, res) => {
       }
     });
 
-    // Fetch context (last 5 interactions)
+    // fetch context 
     const history = await prisma.messageAgent.findMany({
       where: { utilisateurId: user.id, moduleId },
       orderBy: { createdAt: 'desc' },
       take: 10
     });
-    history.reverse(); // chronological order
+    history.reverse(); 
 
-    // Build prompt
+   
     let aiResponseText = "";
     
-    // Simulate AI response for the MVP if API key is not present or invalid
-    if (!process.env.GEMINI_API_KEY) {
-      aiResponseText = "Ceci est une réponse simulée car la clé API Gemini n'est pas configurée dans le fichier .env. " +
+    // simulate AI response for the MVP 
+    if (!process.env.GROQ_API_KEY) {
+      aiResponseText = "Ceci est une réponse simulée car la clé API Groq n'est pas configurée dans le fichier .env. " +
                        "Dans un environnement de production, l'IA utiliserait le contenu suivant du module pour vous répondre :\n\n" + 
-                       (moduleInfo.contenu ? moduleInfo.contenu.substring(0, 100) + "..." : "Aucun contenu textuel.");
+                       ((moduleInfo.contenu || moduleInfo.description) ? (moduleInfo.contenu || moduleInfo.description).substring(0, 100) + "..." : "Aucun contenu textuel.");
     } else {
       try {
-        const systemInstruction = `Tu es le Formateur IA de HR-Trainer. Tu dois répondre à l'élève en te basant UNIQUEMENT sur le contenu du module suivant. Si la réponse n'y est pas, dis-le poliment. Contenu du module: ${moduleInfo.contenu || moduleInfo.description}`;
+        let systemInstruction = `Tu es le Formateur IA de HR-Trainer. Tu dois répondre à l'élève en te basant UNIQUEMENT sur le contenu du module suivant. Si la réponse n'y est pas, dis-le poliment.`;
         
-        const contents = history.map(msg => ({
-          role: msg.role === 'USER' ? 'user' : 'model',
-          parts: [{ text: msg.contenu }]
+        if (moduleInfo.typeContenu === 'VIDEO') {
+          systemInstruction += `\nCe module est une vidéo. Ton rôle est de résumer les concepts abordés ou répondre aux questions en te basant sur sa description et son titre.\nTitre: ${moduleInfo.titre}\nDescription: ${moduleInfo.description || "Aucune description fournie"}`;
+        } else {
+          systemInstruction += `\nContenu du module: ${moduleInfo.contenu || moduleInfo.description}`;
+        }
+        
+        const formattedMessages = history.map(msg => ({
+          role: msg.role === 'USER' ? 'user' : 'assistant',
+          content: msg.contenu
         }));
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: contents,
-            config: {
-                systemInstruction,
-                temperature: 0.3
-            }
+        const response = await groq.chat.completions.create({
+            model: 'llama-3.1-8b-instant',
+            messages: [
+                { role: 'system', content: systemInstruction },
+                ...formattedMessages
+            ],
+            temperature: 0.3
         });
         
-        aiResponseText = response.text || "Je suis désolé, je n'ai pas pu générer de réponse.";
+        aiResponseText = response.choices[0]?.message?.content || "Je suis désolé, je n'ai pas pu générer de réponse.";
       } catch (err) {
-        console.error("Gemini API Error:", err);
-        aiResponseText = "Une erreur s'est produite lors de la connexion à l'IA. Veuillez vérifier la clé API.";
+        console.error("Groq API Error:", err);
+        aiResponseText = "Une erreur s'est produite lors de la connexion à l'IA. Veuillez vérifier la clé API Groq.";
       }
     }
 
-    // Append HR warning if applicable
+    // append HR warning 
     if (isHrQuestion) {
-      aiResponseText += "\n\n⚠️ **Avertissement professionnel** : Votre question semble relever du droit du travail. Bien que je puisse vous guider sur les concepts vus en formation, je vous conseille vivement de consulter un professionnel des RH, un juriste ou votre convention collective pour des conseils légaux spécifiques.";
+      aiResponseText += "\n\n **Avertissement professionnel** : Votre question semble relever du droit du travail. Bien que je puisse vous guider sur les concepts vus en formation, je vous conseille vivement de consulter un professionnel des RH, un juriste ou votre convention collective pour des conseils légaux spécifiques.";
     }
 
-    // Save AI response
     const aiMessage = await prisma.messageAgent.create({
       data: {
         utilisateurId: user.id,
@@ -153,7 +160,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Report conversation to Admin
+// report conversation to Admin
 router.post('/report', async (req, res) => {
   try {
     const { moduleId } = req.params;
@@ -169,7 +176,7 @@ router.post('/report', async (req, res) => {
         include: { formation: true }
     });
 
-    // Fetch recent conversation context
+    // fetch recent conversation context
     const history = await prisma.messageAgent.findMany({
       where: { utilisateurId: user.id, moduleId },
       orderBy: { createdAt: 'desc' },
@@ -187,7 +194,7 @@ router.post('/report', async (req, res) => {
     await transporter.sendMail({
       from: `"HR-Trainer" <${process.env.EMAIL_USER}>`,
       to: process.env.EMAIL_USER, // Send to admin
-      subject: `🚨 Signalement Problème IA - Élève: ${user.nom}`,
+      subject: ` Signalement Problème IA - Élève: ${user.nom}`,
       html: `
         <h2>Signalement d'un problème avec l'Agent IA</h2>
         <p><strong>Élève :</strong> ${user.nom} (${user.email})</p>
