@@ -1,10 +1,13 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from './index';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 const router = Router();
 
-// Middleware to verify admin (Basic implementation, assuming email is passed in query or body for simplicity in this MVP. In production, use JWT or proper session verification)
+// Middleware to verify admin 
 const verifyAdmin = async (req: any, res: any, next: any) => {
   const email = req.query.adminEmail || req.body.adminEmail;
   if (!email) return res.status(401).json({ error: 'Unauthorized' });
@@ -18,9 +21,38 @@ const verifyAdmin = async (req: any, res: any, next: any) => {
 
 router.use(verifyAdmin);
 
-// ==========================================
-// DASHBOARD STATS
-// ==========================================
+// upload file
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadPath = path.join(process.cwd(), 'uploads');
+    if (!fs.existsSync(uploadPath)) {
+      fs.mkdirSync(uploadPath, { recursive: true });
+    }
+    cb(null, uploadPath);
+  },
+  filename: function (req, file, cb) {
+    // generate unique name
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({ storage: storage });
+
+router.post('/upload', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    // url that to access file
+    const fileUrl = `http://localhost:5000/uploads/${req.file.filename}`;
+    res.json({ url: fileUrl });
+  } catch (error) {
+    console.error('Error during upload:', error);
+    res.status(500).json({ error: 'Failed to upload file' });
+  }
+});
+
+// dashboard stats
 router.get('/dashboard', async (req, res) => {
   try {
     const totalUsers = await prisma.utilisateur.count({ where: { role: 'ELEVE' } });
@@ -28,7 +60,7 @@ router.get('/dashboard', async (req, res) => {
     const totalFormations = await prisma.formation.count();
     const premiumUsers = await prisma.utilisateur.count({ where: { role: 'ELEVE', statutAcces: 'PAYANT' } });
 
-    // Fetch recent activity (latest 5 users)
+    // fetch recent activity
     const recentUsers = await prisma.utilisateur.findMany({
       where: { role: 'ELEVE' },
       orderBy: { createdAt: 'desc' },
@@ -48,9 +80,7 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// ==========================================
-// USERS MANAGEMENT
-// ==========================================
+// users management
 router.get('/users', async (req, res) => {
   try {
     const users = await prisma.utilisateur.findMany({
@@ -113,9 +143,7 @@ router.delete('/users/:id', async (req, res) => {
   }
 });
 
-// ==========================================
-// FORMATIONS MANAGEMENT
-// ==========================================
+// formations management
 router.get('/formations', async (req, res) => {
   try {
     const formations = await prisma.formation.findMany({
@@ -132,9 +160,9 @@ router.get('/formations', async (req, res) => {
 
 router.post('/formations', async (req, res) => {
   try {
-    const { titre, description, niveau, duree, gratuit, publie } = req.body;
+    const { titre, description, niveau, duree, gratuit, publie, imageUrl } = req.body;
     const formation = await prisma.formation.create({
-      data: { titre, description, niveau, duree: duree?.toString() || "0", gratuit, publie }
+      data: { titre, description, niveau, duree: duree?.toString() || "0", gratuit, publie, imageUrl }
     });
     res.status(201).json(formation);
   } catch (error) {
@@ -145,10 +173,10 @@ router.post('/formations', async (req, res) => {
 router.put('/formations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { titre, description, niveau, duree, gratuit, publie } = req.body;
+    const { titre, description, niveau, duree, gratuit, publie, imageUrl } = req.body;
     const formation = await prisma.formation.update({
       where: { id },
-      data: { titre, description, niveau, duree: duree?.toString(), gratuit, publie }
+      data: { titre, description, niveau, duree: duree?.toString(), gratuit, publie, imageUrl }
     });
     res.json(formation);
   } catch (error) {
@@ -166,9 +194,7 @@ router.delete('/formations/:id', async (req, res) => {
   }
 });
 
-// ==========================================
-// MODULES MANAGEMENT (ADMIN)
-// ==========================================
+// modules management
 router.get('/formations/:id/modules', async (req, res) => {
   try {
     const { id } = req.params;
@@ -230,6 +256,127 @@ router.delete('/modules/:moduleId', async (req, res) => {
     await prisma.module.delete({ where: { id: moduleId } });
     res.json({ success: true });
   } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// quiz management
+router.get('/modules/:moduleId/quiz', async (req, res) => {
+  try {
+    const { moduleId } = req.params;
+    const quiz = await prisma.quiz.findUnique({
+      where: { moduleId },
+      include: {
+        questions: {
+          include: {
+            options: true
+          }
+        }
+      }
+    });
+    res.json(quiz || null);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/modules/:moduleId/quiz', async (req, res) => {
+  try {
+    const { moduleId } = req.params;
+    const { questions } = req.body;
+
+    // First, check if quiz exists. If so, delete it to recreate (simple approach for MVP)
+    const existingQuiz = await prisma.quiz.findUnique({ where: { moduleId } });
+    if (existingQuiz) {
+      await prisma.quiz.delete({ where: { id: existingQuiz.id } });
+    }
+
+    const newQuiz = await prisma.quiz.create({
+      data: {
+        moduleId,
+        questions: {
+          create: questions.map((q: any) => ({
+            texte: q.texte,
+            options: {
+              create: q.options.map((o: any) => ({
+                texte: o.texte,
+                estCorrecte: o.estCorrecte
+              }))
+            }
+          }))
+        }
+      },
+      include: {
+        questions: {
+          include: {
+            options: true
+          }
+        }
+      }
+    });
+    res.status(201).json(newQuiz);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// user progress management
+router.get('/users/:userId/progress', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const inscriptions = await prisma.inscriptionFormation.findMany({
+      where: { utilisateurId: userId },
+      include: {
+        formation: {
+          include: {
+            modules: {
+              include: {
+                quiz: true
+              }
+            }
+          }
+        }
+      }
+    });
+
+    const completedModules = await prisma.progressionModule.findMany({
+      where: { utilisateurId: userId },
+      include: {
+        module: true
+      }
+    });
+
+    // format the progress data
+    const progressData = inscriptions.map(ins => {
+      const courseModules = ins.formation.modules;
+      const totalModules = courseModules.length;
+      
+      const completedForThisCourse = completedModules.filter(cm => 
+        courseModules.some(m => m.id === cm.moduleId)
+      );
+
+      const completedCount = completedForThisCourse.filter(cm => cm.termine).length;
+      const percentage = totalModules > 0 ? Math.round((completedCount / totalModules) * 100) : 0;
+
+      const quizScores = completedForThisCourse
+        .filter(cm => cm.module.typeContenu === 'QUIZ' && cm.score !== null)
+        .map(cm => ({
+          moduleTitle: cm.module.titre,
+          score: cm.score
+        }));
+
+      return {
+        formationId: ins.formation.id,
+        titre: ins.formation.titre,
+        progression: percentage,
+        quizScores
+      };
+    });
+
+    res.json(progressData);
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Server error' });
   }
 });
