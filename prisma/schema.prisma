@@ -114,6 +114,8 @@ model InscriptionFormation {
   updatedAt   DateTime    @updatedAt
 
   @@unique([utilisateurId, formationId])
+  @@index([utilisateurId])
+  @@index([formationId])
 }
 
 model ProgressionModule {
@@ -128,6 +130,8 @@ model ProgressionModule {
   updatedAt   DateTime    @updatedAt
 
   @@unique([utilisateurId, moduleId])
+  @@index([utilisateurId])
+  @@index([moduleId])
 }
 
 model Attestation {
@@ -140,6 +144,7 @@ model Attestation {
   dateObtention DateTime  @default(now())
 
   @@unique([utilisateurId, formationId])
+  @@index([utilisateurId])
 }
 
 model Notification {
@@ -152,6 +157,8 @@ model Notification {
   utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+
+  @@index([utilisateurId])
 }
 
 model MessageAgent {
@@ -164,4 +171,7 @@ model MessageAgent {
   
   utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
   module        Module      @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@index([utilisateurId])
+  @@index([moduleId])
 }
