@@ -4,6 +4,12 @@ import { prisma } from './index';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import OpenAI from 'openai';
+
+const groq = new OpenAI({ 
+  apiKey: process.env.GROQ_API_KEY || 'dummy_key',
+  baseURL: 'https://api.groq.com/openai/v1'
+});
 
 const router = Router();
 
@@ -77,6 +83,50 @@ router.get('/dashboard', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// AI Analytics Summary
+router.get('/analytics/ai-summary', async (req, res) => {
+  try {
+    if (!process.env.GROQ_API_KEY) {
+      return res.json({ summary: "Clé API Groq manquante. Impossible de générer l'analyse." });
+    }
+
+    // Fetch the last 30 user messages 
+    const recentMessages = await prisma.messageAgent.findMany({
+      where: { role: 'USER' },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+      include: { module: { select: { titre: true } } }
+    });
+
+    if (recentMessages.length === 0) {
+      return res.json({ summary: "Pas assez de données récentes pour générer une analyse." });
+    }
+
+    //prepare context for the AI
+    const conversationContext = recentMessages.map(m => `Dans le module "${m.module.titre}": "${m.contenu}"`).join('\n');
+
+    const systemInstruction = `Tu es un Analyste IA pour une plateforme de formation RH.
+Ton rôle est d'analyser les questions récentes posées par les élèves au chatbot et de générer un résumé de 3 phrases maximum.
+Tu dois identifier la tendance principale (ex: sur quel sujet bloquent-ils le plus, quelles sont les questions récurrentes).
+Sois très direct, professionnel, et apporte de la valeur au formateur. N'utilise pas de liste à puces. Rédige un court paragraphe.
+Voici les derniers messages :
+${conversationContext}`;
+
+    const response = await groq.chat.completions.create({
+      model: 'openai/gpt-oss-20b',
+      messages: [{ role: 'system', content: systemInstruction }],
+      temperature: 0.3,
+      max_tokens: 200
+    });
+
+    const summary = response.choices[0]?.message?.content || "Analyse indisponible pour le moment.";
+    res.json({ summary });
+  } catch (error) {
+    console.error('Error generating AI summary:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération de l\'analyse' });
   }
 });
 
@@ -250,6 +300,91 @@ router.put('/modules/:moduleId', async (req, res) => {
   }
 });
 
+// AI Syllabus Generator
+router.post('/formations/:id/generate-syllabus', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const formation = await prisma.formation.findUnique({ where: { id } });
+    if (!formation) return res.status(404).json({ error: 'Formation non trouvée' });
+
+    if (!process.env.GROQ_API_KEY) {
+      return res.status(400).json({ error: 'Clé API Groq manquante.' });
+    }
+
+    const systemInstruction = `Tu es un ingénieur pédagogique expert.
+Ton rôle est de concevoir le plan de cours (Syllabus) pour une formation intitulée "${formation.titre}".
+${formation.description ? `Description de la formation : "${formation.description}"` : ''}
+
+Tu dois générer exactement 4 modules pertinents et logiques pour cette formation.
+Format exigé : EXCLUSIVEMENT un objet JSON valide contenant une clé "modules", sans aucun texte autour.
+Exemple :
+{
+  "modules": [
+    { "titre": "Module 1 : Introduction", "description": "Dans ce module, nous verrons..." },
+    { "titre": "Module 2 : Approfondissement", "description": "..." }
+  ]
+}`;
+
+    const response = await groq.chat.completions.create({
+      model: 'openai/gpt-oss-20b',
+      messages: [{ role: 'system', content: systemInstruction }],
+      temperature: 0.4,
+      response_format: { type: "json_object" }
+    });
+
+    let generatedText = response.choices[0]?.message?.content || '{"modules":[]}';
+    const parsed = JSON.parse(generatedText);
+    const generatedModules = parsed.modules || [];
+
+    const createdModules = [];
+    for (const mod of generatedModules) {
+      const created = await prisma.module.create({
+        data: {
+          titre: mod.titre,
+          description: mod.description,
+          typeContenu: 'VIDEO',
+          formationId: id
+        }
+      });
+      createdModules.push(created);
+    }
+
+    res.json({ modules: createdModules });
+  } catch (error) {
+    console.error('Error generating syllabus:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération du plan de formation' });
+  }
+});
+
+// AI  for Module Content
+router.post('/copilot', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'Prompt manquant' });
+
+    if (!process.env.GROQ_API_KEY) {
+      return res.status(400).json({ error: 'Clé API Groq manquante.' });
+    }
+
+    const systemInstruction = `Tu es un assistant de rédaction (Copilote) pour une plateforme de formation RH.
+Ton rôle est de rédiger un texte clair, pédagogique et structuré pour un cours, basé sur les mots-clés ou l'instruction fournie par le formateur.
+Rédige directement le contenu, sans introduction ni fioriture. 
+Sujet : ${prompt}`;
+
+    const response = await groq.chat.completions.create({
+      model: 'openai/gpt-oss-20b',
+      messages: [{ role: 'system', content: systemInstruction }],
+      temperature: 0.6,
+    });
+
+    const generatedText = response.choices[0]?.message?.content || "";
+    res.json({ content: generatedText });
+  } catch (error) {
+    console.error('Error in copilot:', error);
+    res.status(500).json({ error: 'Erreur de génération' });
+  }
+});
+
 router.delete('/modules/:moduleId', async (req, res) => {
   try {
     const { moduleId } = req.params;
@@ -277,6 +412,69 @@ router.get('/modules/:moduleId/quiz', async (req, res) => {
     res.json(quiz || null);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.post('/modules/:moduleId/quiz/generate', async (req, res) => {
+  try {
+    const { moduleId } = req.params;
+    
+    //fetch module content
+    const moduleInfo = await prisma.module.findUnique({
+      where: { id: moduleId }
+    });
+
+    if (!moduleInfo) {
+      return res.status(404).json({ error: 'Module not found' });
+    }
+
+    if (!process.env.GROQ_API_KEY) {
+      return res.status(400).json({ error: 'Clé API Groq non configurée. Impossible de générer le quiz.' });
+    }
+
+    const contentText = moduleInfo.contenu || moduleInfo.description || moduleInfo.titre;
+    
+    const systemInstruction = `Tu es un expert pédagogique. Ton rôle est de générer un quiz à choix multiples basé STRICTEMENT sur le contenu suivant.
+Tu dois générer exactement 3 questions.
+Chaque question doit avoir entre 2 et 4 options, avec exactement UNE seule option correcte.
+Tu dois formater ta réponse EXCLUSIVEMENT en format JSON valide, sous la forme d'un objet contenant une clé "questions", sans aucun texte avant ou après.
+Voici le format exact attendu :
+{
+  "questions": [
+    {
+      "texte": "Question 1 ?",
+      "options": [
+        { "texte": "Faux 1", "estCorrecte": false },
+        { "texte": "Vrai 1", "estCorrecte": true }
+      ]
+    }
+  ]
+}
+
+Contenu du module :
+${contentText}
+`;
+
+    const response = await groq.chat.completions.create({
+      model: 'openai/gpt-oss-20b',
+      messages: [{ role: 'system', content: systemInstruction }],
+      temperature: 0.2,
+      response_format: { type: "json_object" }
+    });
+    
+    let generatedText = response.choices[0]?.message?.content || '{"questions":[]}';
+    const parsed = JSON.parse(generatedText);
+    const questions = parsed.questions;
+    
+    // Validate format
+    if (!Array.isArray(questions)) {
+       throw new Error('Format généré invalide, le tableau questions est manquant.');
+    }
+
+    res.json({ questions });
+  } catch (error) {
+    console.error('Error generating AI quiz:', error);
+    res.status(500).json({ error: 'Erreur lors de la génération du quiz par l\'IA' });
   }
 });
 

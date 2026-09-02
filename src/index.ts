@@ -6,6 +6,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
+import OpenAI from 'openai';
 import adminRoutes from './adminRoutes';
 import agentRoutes from './agentRoutes';
 import path from 'path';
@@ -26,7 +27,26 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-app.use(cors());
+const groq = new OpenAI({ 
+  apiKey: process.env.GROQ_API_KEY || 'dummy_key',
+  baseURL: 'https://api.groq.com/openai/v1'
+});
+
+const allowedOrigins = [
+  'http://localhost:3000',
+  process.env.FRONTEND_URL || 'https://mon-super-projet-hr-trainer.vercel.app'
+];
+
+app.use(cors({
+  origin: function(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Non autorisé par les règles CORS'));
+    }
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -37,7 +57,7 @@ app.use('/api/admin', adminRoutes);
 
 app.use('/api/eleve/modules/:moduleId/agent', agentRoutes);
 
-//récupérer toutes les formations 
+//récupérer les formations 
 app.get('/api/formations', async (req, res) => {
   try {
     const formations = await prisma.formation.findMany({
@@ -49,7 +69,7 @@ app.get('/api/formations', async (req, res) => {
   }
 });
 
-//récupérer une formation par ID
+//récupérer formation par id
 app.get('/api/formations/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -177,12 +197,12 @@ app.post('/api/contact', async (req, res) => {
 
 const ALLOWED_DOMAIN = '@entreprise.com';
 
-// Inscription 
+// sign up
 app.post('/api/inscription', async (req, res) => {
   try {
     const { email, password, nom, profil } = req.body;
     
-    //si l'utilisateur existe 
+    //if user exist 
     const existingUser = await prisma.utilisateur.findUnique({ where: { email } });
     if (existingUser) {
       res.status(400).json({ error: 'Cet email est déjà utilisé' });
@@ -226,7 +246,7 @@ app.post('/api/inscription', async (req, res) => {
   }
 });
 
-//  Connexion 
+// sign in
 app.post('/api/connexion', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -464,6 +484,67 @@ app.get('/api/eleve/dashboard', async (req, res) => {
   }
 });
 
+// Mot du coach IA
+app.get('/api/eleve/dashboard/coach-message', async (req, res) => {
+  try {
+    const email = req.query.email;
+    const locale = req.query.locale || 'fr';
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Email manquant' });
+    }
+
+    const user = await prisma.utilisateur.findUnique({ where: { email } });
+    if (!user) return res.status(404).json({ error: 'Utilisateur non trouvé' });
+
+    // Récuperer les stats
+    const inscriptions = await prisma.inscriptionFormation.findMany({
+      where: { utilisateurId: user.id },
+      include: { formation: { include: { modules: true } } }
+    });
+    
+    const modulesTermines = await prisma.progressionModule.count({
+      where: { utilisateurId: user.id, termine: true }
+    });
+
+    const attestations = await prisma.attestation.count({
+      where: { utilisateurId: user.id }
+    });
+
+    let contextText = `L'élève s'appelle ${user.nom}. `;
+    if (inscriptions.length === 0) {
+      contextText += "Il vient de s'inscrire et n'a encore commencé aucune formation. Encourage-le à découvrir le catalogue.";
+    } else {
+      contextText += `Il est inscrit à ${inscriptions.length} formations. Il a terminé ${modulesTermines} modules au total, et possède ${attestations} attestations de réussite.`;
+    }
+
+    const languageInstruction = locale === 'en' ? 'IMPORTANT: You MUST write your message in English.' : 'IMPORTANT: Tu DOIS écrire ton message en Français.';
+
+    const systemInstruction = `Tu es le Formateur IA de HR-Trainer, un coach RH dynamique et bienveillant. 
+Ton rôle est d'écrire un TOUT PETIT message (maximum 2 phrases, très direct) pour motiver cet élève lorsqu'il se connecte à son espace. 
+Utilise son prénom (${user.nom.split(' ')[0]}) et tutoie-le. 
+Contexte : ${contextText}
+${languageInstruction}`;
+
+    if (!process.env.GROQ_API_KEY) {
+       return res.json({ message: `Salut ${user.nom.split(' ')[0]} ! Bienvenue sur ton espace HR-Trainer, prêt à apprendre de nouvelles choses aujourd'hui ? (Message simulé car clé Groq absente)` });
+    }
+
+    const response = await groq.chat.completions.create({
+      model: 'openai/gpt-oss-20b',
+      messages: [{ role: 'system', content: systemInstruction }],
+      temperature: 0.7,
+      max_tokens: 150
+    });
+
+    const aiMessage = response.choices[0]?.message?.content || `Salut ${user.nom.split(' ')[0]} ! Prêt à continuer ta progression ?`;
+    res.json({ message: aiMessage });
+
+  } catch (error) {
+    console.error('Erreur mot du coach:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 // Lecteur de module
 app.get('/api/eleve/modules/:moduleId', async (req, res) => {
   try {
@@ -514,7 +595,17 @@ app.get('/api/eleve/modules/:moduleId', async (req, res) => {
       where: { utilisateurId_moduleId: { utilisateurId: user.id, moduleId } }
     });
 
-    res.json({ module, progression });
+    const completedModulesCount = await prisma.progressionModule.count({
+      where: {
+        utilisateurId: user.id,
+        termine: true,
+        module: {
+          formationId: module.formationId
+        }
+      }
+    });
+
+    res.json({ module, progression, completedModulesCount });
   } catch (error: any) {
     console.error('Erreur get module:', error);
     res.status(500).json({ error: error.message || 'Erreur serveur' });
@@ -534,7 +625,7 @@ app.post('/api/eleve/modules/:moduleId/complete', async (req, res) => {
 
     let finalScore = score ?? null;
 
-    // compute score if answers are provided
+    // compute score if answers are true
     if (answers && Object.keys(answers).length > 0) {
       const quiz = await prisma.quiz.findUnique({
         where: { moduleId },
