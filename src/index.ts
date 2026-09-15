@@ -32,6 +32,8 @@ const groq = new OpenAI({
   baseURL: 'https://api.groq.com/openai/v1'
 });
 
+import b2bRoutes from './b2bRoutes';
+
 const allowedOrigins = [
   'http://localhost:3000',
   process.env.FRONTEND_URL || 'https://mon-super-projet-hr-trainer.vercel.app'
@@ -47,8 +49,14 @@ app.use(cors({
   },
   credentials: true
 }));
+
+// Route Stripe Webhook doit être parsée en raw text AVANT express.json()
+app.use('/api/b2b/webhook', express.raw({ type: 'application/json' }));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+app.use('/api/b2b', b2bRoutes);
 
 // serve uploaded files 
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
@@ -64,9 +72,7 @@ app.get('/api/formations', async (req, res) => {
       where: { publie: true },
     });
     res.json(formations);
-  } catch (error) {
-    res.status(500).json({ error: 'Erreur serveur' });
-  }
+  } catch (error) { console.error(error); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 //récupérer formation par id
@@ -78,6 +84,12 @@ app.get('/api/formations/:id', async (req, res) => {
       include: {
         modules: {
           select: { id: true, titre: true } 
+        },
+        evaluations: {
+          include: {
+            utilisateur: { select: { id: true, nom: true, profil: true, photo: true } }
+          },
+          orderBy: { createdAt: 'desc' }
         }
       }
     });
@@ -88,9 +100,7 @@ app.get('/api/formations/:id', async (req, res) => {
     }
     
     res.json(formation);
-  } catch (error) {
-    res.status(500).json({ error: 'Erreur serveur' });
-  }
+  } catch (error) { console.error(error); res.status(500).json({ error: 'Erreur serveur' }); }
 });
 
 //envoyer un email 
@@ -767,4 +777,67 @@ app.put('/api/notifications/read-all', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Backend Server running on http://localhost:${port}`);
+});
+// ==========================================
+// EVALUATIONS
+// ==========================================
+
+// Add evaluation
+app.post('/api/formations/:id/evaluations', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { utilisateurId, note, commentaire } = req.body;
+    
+    // Check if user already reviewed
+    const existing = await prisma.evaluation.findUnique({
+      where: {
+        formationId_utilisateurId: {
+          formationId: id,
+          utilisateurId: utilisateurId
+        }
+      }
+    });
+
+    if (existing) {
+      return res.status(400).json({ error: 'Vous avez d�j� �valu� cette formation.' });
+    }
+
+    const evaluation = await prisma.evaluation.create({
+      data: {
+        note,
+        commentaire,
+        formationId: id,
+        utilisateurId
+      },
+      include: {
+        utilisateur: {
+          select: { id: true, nom: true, profil: true, photo: true }
+        }
+      }
+    });
+    res.json(evaluation);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to create evaluation' });
+  }
+});
+
+// Get evaluations
+app.get('/api/formations/:id/evaluations', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const evaluations = await prisma.evaluation.findMany({
+      where: { formationId: id },
+      include: {
+        utilisateur: {
+          select: { id: true, nom: true, profil: true, photo: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(evaluations);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to fetch evaluations' });
+  }
 });

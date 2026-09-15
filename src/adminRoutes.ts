@@ -210,9 +210,9 @@ router.get('/formations', async (req, res) => {
 
 router.post('/formations', async (req, res) => {
   try {
-    const { titre, description, niveau, duree, gratuit, publie, imageUrl } = req.body;
+    const { titre, description, niveau, duree, gratuit, prix, publie, imageUrl } = req.body;
     const formation = await prisma.formation.create({
-      data: { titre, description, niveau, duree: duree?.toString() || "0", gratuit, publie, imageUrl }
+      data: { titre, description, niveau, duree: duree?.toString() || "0", gratuit, prix: prix ? parseFloat(prix) : null, publie, imageUrl }
     });
     res.status(201).json(formation);
   } catch (error) {
@@ -223,10 +223,10 @@ router.post('/formations', async (req, res) => {
 router.put('/formations/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { titre, description, niveau, duree, gratuit, publie, imageUrl } = req.body;
+    const { titre, description, niveau, duree, gratuit, prix, publie, imageUrl } = req.body;
     const formation = await prisma.formation.update({
       where: { id },
-      data: { titre, description, niveau, duree: duree?.toString(), gratuit, publie, imageUrl }
+      data: { titre, description, niveau, duree: duree?.toString(), gratuit, prix: prix ? parseFloat(prix) : null, publie, imageUrl }
     });
     res.json(formation);
   } catch (error) {

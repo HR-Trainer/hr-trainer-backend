@@ -13,11 +13,13 @@ model Formation {
   niveau      String   
   duree       String   
   gratuit     Boolean  @default(false)
+  prix        Float?   // Prix en euros si la formation n'est pas gratuite
   publie      Boolean  @default(false)
   imageUrl    String?
   modules      Module[]
   inscriptions InscriptionFormation[]
   attestations Attestation[]
+  evaluations  Evaluation[]
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
@@ -79,6 +81,31 @@ enum AccesStatus {
 enum Role {
   ADMIN
   ELEVE
+  RH_ADMIN
+  EMPLOYEE
+}
+
+model Entreprise {
+  id                   String       @id @default(uuid())
+  nom                  String
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  subscriptionStatus   String       @default("inactive")
+  employes             Utilisateur[]
+  invitations          Invitation[]
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+}
+
+model Invitation {
+  id           String     @id @default(uuid())
+  email        String
+  token        String     @unique
+  entrepriseId String
+  entreprise   Entreprise @relation(fields: [entrepriseId], references: [id], onDelete: Cascade)
+  utilisee     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  expiresAt    DateTime
 }
 
 model Utilisateur {
@@ -93,6 +120,10 @@ model Utilisateur {
   poste       String?
   role        Role        @default(ELEVE)
   actif       Boolean     @default(true)
+  
+  entrepriseId String?
+  entreprise   Entreprise? @relation(fields: [entrepriseId], references: [id], onDelete: SetNull)
+
   createdAt            DateTime               @default(now())
   updatedAt            DateTime               @updatedAt
   inscriptions         InscriptionFormation[]
@@ -100,6 +131,7 @@ model Utilisateur {
   attestations         Attestation[]
   notifications        Notification[]
   messagesAgent        MessageAgent[]
+  evaluations          Evaluation[]
 }
 
 model InscriptionFormation {
@@ -174,4 +206,19 @@ model MessageAgent {
 
   @@index([utilisateurId])
   @@index([moduleId])
+}
+
+model Evaluation {
+  id            String      @id @default(uuid())
+  note          Int
+  commentaire   String?
+  formationId   String
+  utilisateurId String
+  formation     Formation   @relation(fields: [formationId], references: [id], onDelete: Cascade)
+  utilisateur   Utilisateur @relation(fields: [utilisateurId], references: [id], onDelete: Cascade)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([formationId, utilisateurId])
+  @@index([formationId])
 }
