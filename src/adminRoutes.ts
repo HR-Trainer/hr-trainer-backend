@@ -106,7 +106,7 @@ router.get('/analytics/ai-summary', async (req, res) => {
     }
 
     //prepare context for the AI
-    const conversationContext = recentMessages.map(m => `Dans le module "${m.module.titre}": "${m.contenu}"`).join('\n');
+    const conversationContext = recentMessages.map(m => `Dans le module "${m.module ? m.module.titre : 'Général'}": "${m.contenu}"`).join('\n');
 
     const systemInstruction = `Tu es un Analyste IA pour une plateforme de formation RH.
 Ton rôle est d'analyser les questions récentes posées par les élèves au chatbot et de générer un résumé de 3 phrases maximum.
@@ -329,11 +329,16 @@ Exemple :
       model: 'openai/gpt-oss-20b',
       messages: [{ role: 'system', content: systemInstruction }],
       temperature: 0.4,
-      response_format: { type: "json_object" }
+      
     });
 
     let generatedText = response.choices[0]?.message?.content || '{"modules":[]}';
-    const parsed = JSON.parse(generatedText);
+    
+      let jsonStr = generatedText;
+      const match = generatedText.match(/\{[\s\S]*\}/);
+      if (match) jsonStr = match[0];
+      const parsed = JSON.parse(jsonStr);
+
     const generatedModules = parsed.modules || [];
 
     const createdModules = [];
@@ -459,11 +464,16 @@ ${contentText}
       model: 'openai/gpt-oss-20b',
       messages: [{ role: 'system', content: systemInstruction }],
       temperature: 0.2,
-      response_format: { type: "json_object" }
+      
     });
     
     let generatedText = response.choices[0]?.message?.content || '{"questions":[]}';
-    const parsed = JSON.parse(generatedText);
+    
+      let jsonStr = generatedText;
+      const match = generatedText.match(/\{[\s\S]*\}/);
+      if (match) jsonStr = match[0];
+      const parsed = JSON.parse(jsonStr);
+
     const questions = parsed.questions;
     
     // Validate format
@@ -560,7 +570,7 @@ router.get('/users/:userId/progress', async (req, res) => {
       const quizScores = completedForThisCourse
         .filter(cm => cm.module.typeContenu === 'QUIZ' && cm.score !== null)
         .map(cm => ({
-          moduleTitle: cm.module.titre,
+          moduleTitle: cm.module ? m.module.titre : 'Général',
           score: cm.score
         }));
 

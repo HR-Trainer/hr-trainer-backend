@@ -33,6 +33,7 @@ const groq = new OpenAI({
 });
 
 import b2bRoutes from './b2bRoutes';
+import adminPaymentsRoute from './adminPaymentsRoute';
 
 const allowedOrigins = [
   'http://localhost:3000',
@@ -57,6 +58,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 app.use('/api/b2b', b2bRoutes);
+app.use('/api/admin/payments', adminPaymentsRoute);
 
 // serve uploaded files 
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
@@ -278,9 +280,48 @@ app.post('/api/connexion', async (req, res) => {
       return;
     }
 
-    res.json({ id: user.id, email: user.email, nom: user.nom, profil: user.profil, statutAcces: user.statutAcces, photo: user.photo, telephone: user.telephone, poste: user.poste, role: user.role });
+    res.json({ id: user.id, email: user.email, nom: user.nom, profil: user.profil, statutAcces: user.statutAcces, photo: user.photo, telephone: user.telephone, poste: user.poste, role: user.role, forcePasswordReset: user.forcePasswordReset });
   } catch (error) {
     console.error('Erreur connexion:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Force password reset
+app.post('/api/auth/reset-password-first-login', async (req, res) => {
+  try {
+    const { email, currentPassword, newPassword } = req.body;
+    
+    if (!email || !currentPassword || !newPassword) {
+      res.status(400).json({ error: 'Données manquantes' });
+      return;
+    }
+
+    const user = await prisma.utilisateur.findUnique({ where: { email } });
+    if (!user) {
+      res.status(404).json({ error: 'Utilisateur non trouvé' });
+      return;
+    }
+
+    const isValid = await bcrypt.compare(currentPassword, user.motDePasse);
+    if (!isValid) {
+      res.status(401).json({ error: 'Ancien mot de passe incorrect' });
+      return;
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+    
+    await prisma.utilisateur.update({
+      where: { email },
+      data: {
+        motDePasse: hashedNewPassword,
+        forcePasswordReset: false
+      }
+    });
+
+    res.json({ success: true, message: 'Mot de passe mis à jour avec succès' });
+  } catch (error) {
+    console.error('Erreur reset password:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
@@ -450,44 +491,95 @@ app.get('/api/eleve/dashboard', async (req, res) => {
       return;
     }
 
-    // Formations enrolled
-    const inscriptions = await prisma.inscriptionFormation.findMany({
-      where: { utilisateurId: user.id },
-      include: { formation: { include: { modules: { take: 1, orderBy: { createdAt: 'asc' } } } } }
-    });
+    const isEntreprise = user.role === 'ENTREPRISE';
+      let targetUserIds = [user.id];
+      
+      if (isEntreprise) {
+        const employees = await prisma.utilisateur.findMany({ where: { entrepriseId: user.id } });
+        if (employees.length > 0) {
+          targetUserIds = employees.map(e => e.id);
+        } else {
+          targetUserIds = []; // no employees
+        }
+      }
 
-    // Published Formations
-    const availableCourses = await prisma.formation.findMany({
-      where: { publie: true },
-      include: { modules: { take: 1, orderBy: { createdAt: 'asc' } } }
-    });
-    const modulesTermines = await prisma.progressionModule.count({
-      where: { utilisateurId: user.id, termine: true }
-    });
+      const inscriptions = await prisma.inscriptionFormation.findMany({
+        where: { utilisateurId: { in: targetUserIds } },
+        include: { formation: { include: { modules: { take: 1, orderBy: { createdAt: 'asc' } } } } }
+      });
 
-    // Recent Activity
-    const recentActivity = await prisma.progressionModule.findMany({
-      where: { utilisateurId: user.id, termine: true },
-      include: { module: { include: { formation: true } } },
-      orderBy: { updatedAt: 'desc' },
-      take: 5
-    });
+      const availableCourses = await prisma.formation.findMany({
+        where: { publie: true },
+        include: { modules: { take: 1, orderBy: { createdAt: 'asc' } } }
+      });
 
-    // Attestations
-    const attestations = await prisma.attestation.count({
-      where: { utilisateurId: user.id }
-    });
+      const modulesTermines = await prisma.progressionModule.count({
+        where: { utilisateurId: { in: targetUserIds }, termine: true }
+      });
 
-    res.json({
-      inscriptions,
-      availableCourses,
-      recentActivity,
-      stats: {
-        modulesTermines,
-        attestations
-      },
-      createdAt: user.createdAt
-    });
+      const recentActivity = await prisma.progressionModule.findMany({
+        where: { utilisateurId: { in: targetUserIds }, termine: true },
+        include: { module: { include: { formation: true } } },
+        orderBy: { updatedAt: 'desc' },
+        take: 5
+      });
+
+      const attestations = await prisma.attestation.count({
+        where: { utilisateurId: { in: targetUserIds } }
+      });
+
+      // Historical Progress Calculation
+      const now = new Date();
+      const currentDay = now.getDay();
+      const distanceToMonday = currentDay === 0 ? 6 : currentDay - 1;
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - distanceToMonday);
+      startOfWeek.setHours(0, 0, 0, 0);
+
+      const weekProgressions = await prisma.progressionModule.findMany({
+        where: {
+          utilisateurId: { in: targetUserIds },
+          termine: true,
+          updatedAt: { gte: startOfWeek }
+        }
+      });
+
+      const dayNames = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+      let cumulative = 0;
+      
+      const historicalProgress = dayNames.map((dayName, idx) => {
+        const dayStart = new Date(startOfWeek);
+        dayStart.setDate(startOfWeek.getDate() + idx);
+        const dayEnd = new Date(dayStart);
+        dayEnd.setDate(dayStart.getDate() + 1);
+
+        const completedOnDay = weekProgressions.filter(p => p.updatedAt >= dayStart && p.updatedAt < dayEnd).length;
+        
+        if (targetUserIds.length > 0) {
+          if (isEntreprise) {
+              cumulative += (completedOnDay / targetUserIds.length) * 15;
+          } else {
+              cumulative += completedOnDay * 15;
+          }
+        }
+        
+        return { 
+          name: dayName, 
+          progress: Math.min(100, Math.round(cumulative)) 
+        };
+      });
+
+      res.json({
+        inscriptions,
+        availableCourses,
+        recentActivity,
+        historicalProgress,
+        stats: {
+          modulesTermines,
+          attestations
+        },
+        createdAt: user.createdAt
+      });
   } catch (error) {
     console.error('Erreur dashboard eleve:', error);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -595,7 +687,11 @@ app.get('/api/eleve/modules/:moduleId', async (req, res) => {
       return;
     }
 
-    if (user.statutAcces === 'GRATUIT' && !module.formation.gratuit) {
+    const isEnrolled = await prisma.inscriptionFormation.findFirst({
+      where: { utilisateurId: user.id, formationId: module.formationId }
+    });
+
+    if (user.statutAcces === 'GRATUIT' && !module.formation.gratuit && !isEnrolled) {
       res.status(403).json({ error: 'Accès refusé. Cette formation nécessite un abonnement payant.' });
       return;
     }
