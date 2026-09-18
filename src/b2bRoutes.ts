@@ -3,6 +3,7 @@ import Stripe from 'stripe';
 import { prisma } from './index';
 import { Resend } from 'resend';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_123', {
@@ -140,8 +141,8 @@ router.post('/buy-formation', async (req, res) => {
         },
       ],
       mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL}/formations/${formation.id}?success=true`,
-      cancel_url: `${process.env.FRONTEND_URL}/formations/${formation.id}?canceled=true`,
+      ui_mode: 'embedded',
+      return_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/formations/${formation.id}?session_id={CHECKOUT_SESSION_ID}`,
       customer_email: email,
       metadata: {
         formationId,
@@ -149,7 +150,7 @@ router.post('/buy-formation', async (req, res) => {
       }
     });
 
-    res.json({ url: session.url });
+    res.json({ clientSecret: session.client_secret });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -215,6 +216,125 @@ router.get('/invite/:token', async (req, res) => {
     res.json({ email: invitation.email, entrepriseId: invitation.entrepriseId, nomEntreprise: invitation.entreprise.nom });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// 5. Inviter employés à une formation (B2B_EMPLOYEE)
+router.post('/invite-to-course', async (req, res) => {
+  try {
+    const { emails, formationId, entrepriseId } = req.body;
+    
+    if (!emails || !formationId || !entrepriseId) {
+      return res.status(400).json({ error: 'Missing parameters' });
+    }
+
+    const formation = await prisma.formation.findUnique({ where: { id: formationId } });
+    if (!formation) return res.status(404).json({ error: 'Formation non trouvée' });
+
+    const results = [];
+    const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/connexion`;
+
+    for (const email of emails) {
+      try {
+        let user = await prisma.utilisateur.findUnique({ where: { email } });
+        let tempPassword = null;
+
+        if (!user) {
+          tempPassword = crypto.randomBytes(8).toString('hex');
+          const hashedPassword = await bcrypt.hash(tempPassword, 10);
+          user = await prisma.utilisateur.create({
+            data: {
+              email,
+              motDePasse: hashedPassword,
+              nom: email.split('@')[0],
+              role: 'B2B_EMPLOYEE',
+              profil: 'B2B',
+              entrepriseId,
+              forcePasswordReset: true
+            }
+          });
+        }
+
+        // Check if already enrolled
+        const existing = await prisma.inscriptionFormation.findFirst({
+          where: { utilisateurId: user.id, formationId }
+        });
+
+        if (!existing) {
+          await prisma.inscriptionFormation.create({
+            data: { utilisateurId: user.id, formationId }
+          });
+        }
+
+        // Email
+        await resend.emails.send({
+          from: 'HR-Trainer <onboarding@resend.dev>',
+          to: email,
+          subject: "Invitation à une formation sur HR-Trainer",
+          html: `
+            <h1>Bienvenue sur HR-Trainer</h1>
+            <p>Votre entreprise vous a invité à suivre la formation : <strong>${formation.titre}</strong>.</p>
+            ${tempPassword ? `<p>Votre compte a été créé. Voici vos identifiants temporaires :</p>
+            <ul>
+              <li><strong>Email:</strong> ${email}</li>
+              <li><strong>Mot de passe provisoire:</strong> ${tempPassword}</li>
+            </ul>
+            <p><em>Vous devrez changer ce mot de passe lors de votre première connexion.</em></p>` : `<p>Connectez-vous avec vos identifiants habituels.</p>`}
+            <a href="${loginUrl}" style="display:inline-block;padding:10px 20px;background-color:#0066FF;color:white;text-decoration:none;border-radius:5px;margin-top:10px;">Accéder à la plateforme</a>
+          `
+        });
+        results.push({ email, status: 'success' });
+        
+        if (tempPassword) {
+          console.log(`[TEST MODE] Generated password for ${email}: ${tempPassword}`);
+        }
+      } catch (err) {
+        console.error(`Erreur envoi email pour ${email}:`, err);
+        results.push({ email, status: 'error' });
+      }
+    }
+
+    res.json({ success: true, results });
+  } catch (error: any) {
+    console.error('Erreur invite-to-course:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Nouvelle route pour vérifier le paiement au retour du client
+router.get('/verify-session', async (req, res) => {
+  try {
+    const { session_id } = req.query;
+    if (!session_id || typeof session_id !== 'string') {
+      return res.status(400).json({ error: 'Session ID missing' });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+
+    if (session.payment_status === 'paid' && session.metadata?.formationId && session.metadata?.utilisateurId) {
+      const formationId = session.metadata.formationId;
+      const utilisateurId = session.metadata.utilisateurId;
+
+      // Vérifier si l'inscription existe déjà
+      let inscription = await prisma.inscriptionFormation.findFirst({
+        where: { utilisateurId, formationId }
+      });
+
+      // Si elle n'existe pas, on la crée (fallback si le webhook est lent ou inactif)
+      if (!inscription) {
+        inscription = await prisma.inscriptionFormation.create({
+          data: { utilisateurId, formationId, progression: 0 }
+        });
+        console.log(`[Verify] Inscription forcée pour ${utilisateurId} à la formation ${formationId}`);
+      }
+
+      return res.json({ success: true, status: session.status });
+    }
+
+    res.json({ success: false, status: session.status });
+  } catch (error) {
+    console.error('Erreur Verify Session:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 

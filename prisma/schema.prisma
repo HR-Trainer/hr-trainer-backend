@@ -120,6 +120,7 @@ model Utilisateur {
   poste       String?
   role        Role        @default(ELEVE)
   actif       Boolean     @default(true)
+  forcePasswordReset Boolean @default(false)
   
   entrepriseId String?
   entreprise   Entreprise? @relation(fields: [entrepriseId], references: [id], onDelete: SetNull)
